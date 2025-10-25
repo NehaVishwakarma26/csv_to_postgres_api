@@ -1,6 +1,9 @@
-// File: config/db.js
-// Description: Creates and exports a PostgreSQL connection pool. 
-// Validates environment variables and tests the connection at startup.
+/**
+ * File: config/db.js
+ * Description: Creates and exports a PostgreSQL connection pool.
+ *              Validates required environment variables and tests the
+ *              database connection at application startup.
+ */
 
 const { Pool } = require('pg');
 const logger = require('./logger');

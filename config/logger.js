@@ -1,6 +1,9 @@
-// File: config/logger.js
-// Description: Configures and exports a Winston logger for structured logging
-// across the application, including console and file outputs.
+/**
+ * File: config/logger.js
+ * Description: Configures and exports a Winston logger for structured logging
+ *              across the application, including console and file outputs.
+ *              Supports log levels and daily log rotation.
+ */
 
 const { createLogger, format, transports } = require('winston');
 
