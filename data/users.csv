@@ -1,0 +1,9 @@
+name.firstName,name.lastName,age,address.line1,address.line2,address.city,address.state,gender,occupation,company.name
+Rohit,Prasad,35,A-563 Rakshak Society,New Pune Road,Pune,Maharashtra,male,Engineer,Kelp Global
+Jane,Doe,25,123 Main St,,Anytown,NY,female,Doctor,General Hospital
+Sam,Smith,52,,Unit 5,Someville,CA,male,Manager,TechCorp
+Priya,Sharma,19,Sector 15,,Chandigarh,Chandigarh,female,Student,
+Alex,Johnson,45,456 Oak Ave,,Springfield,IL,non-binary,Artist,Self-Employed
+Michael,Brown,65,789 Pine Ln,,Oldtown,TX,male,Retired,
+Maria,Garcia,39,C/ Alcala 20,,Madrid,Spain,female,Architect,ArchiDesign
+Li,Wei,29,45 Wangfujing,,Beijing,China,male,Developer,ByteDance
