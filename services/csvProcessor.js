@@ -1,118 +1,144 @@
 /**
  * File: services/csvProcessor.js
- * Description: Processes CSV files in batches, maps data to DB format, and inserts into PostgreSQL.
- *              Handles errors, transactions, and generates age distribution reports after processing.
+ * Description:
+ *   Safely processes CSV files in batches and prepares data for DB insertion.
+ *   Mandatory fields are validated; optional fields are converted to JSON or null.
+ *   SQL queries are imported from a separate file for clean separation of concerns.
  */
 
 const fs = require('fs');
 const readline = require('readline');
 const pool = require('../config/db');
 const logger = require('../config/logger');
-const { parseCsvLine, buildObjectFromRow } = require('../utils/parser');
-const { mapRowToDb } = require('../utils/mapper');
+const { buildObjectFromRow } = require('../utils/parser');
 const { generateReport } = require('./reportService');
+const { INSERT_USERS_BATCH } = require('../queries/userQueries');
 
-const BATCH_SIZE = 1000; // Number of records to insert per batch
+const BATCH_SIZE = 1000;
 
 /**
- * Inserts a batch of user records into the database.
- * @param {Array} batch - Array of user objects mapped to DB columns
- * @param {Object} client - PostgreSQL client
+ * Maps a parsed CSV object to a database row.
+ * Validates mandatory fields and converts optional fields to JSON or null.
+ * @param {Object} parsedRecord
+ * @returns {Object|null} DB row or null if mandatory fields are invalid
  */
-async function insertBatch(batch, client) {
+function mapCsvRecordToDbRow(parsedRecord) {
   try {
-    const values = [];
-    const placeholders = batch.map((row, index) => {
-      const offset = index * 4; // 4 columns per row
-      values.push(row.name, row.age, row.address, row.additional_info);
-      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
-    }).join(',');
+    const firstName = parsedRecord['name.firstName']?.trim();
+    const lastName = parsedRecord['name.lastName']?.trim();
+    const age = parseInt(parsedRecord['age'], 10);
 
-    const insertQuery = `
-      INSERT INTO users (name, age, address, additional_info)
-      VALUES ${placeholders}
-    `;
+    if (!firstName || !lastName || isNaN(age)) return null;
 
-    await client.query(insertQuery, values);
-    logger.info(`Inserted batch of ${batch.length} records.`);
-  } catch (error) {
-    logger.error(`Failed to insert batch: ${error.stack}`);
-    throw error; // Propagate error to rollback transaction
+    const fullName = `${firstName} ${lastName}`;
+
+    const addressFields = ['address.line1', 'address.line2', 'address.city', 'address.state'];
+    const addressObj = {};
+    addressFields.forEach(field => {
+      const value = parsedRecord[field]?.trim();
+      if (value) addressObj[field.split('.').pop()] = value;
+    });
+    const address = Object.keys(addressObj).length ? addressObj : null;
+
+    const additionalInfo = {};
+    Object.keys(parsedRecord).forEach(field => {
+      if (!['name.firstName', 'name.lastName', 'age', ...addressFields].includes(field)) {
+        const value = parsedRecord[field]?.trim();
+        if (value) additionalInfo[field] = value;
+      }
+    });
+
+    return {
+      name: fullName,
+      age,
+      address,
+      additional_info: Object.keys(additionalInfo).length ? additionalInfo : null
+    };
+  } catch (err) {
+    return null;
   }
 }
 
 /**
- * Processes a CSV file and inserts its data into the database.
- * @param {string} filePath - Path to the CSV file
+ * Inserts a batch of validated DB rows.
+ * Skips any null rows.
+ * @param {Array<Object>} dbRows
+ * @param {Object} dbClient
  */
-async function processCsv(filePath) {
-  logger.info(`Starting CSV processing: ${filePath}`);
+async function insertBatch(dbRows, dbClient) {
+  const validRows = dbRows.filter(row => row !== null);
+  if (!validRows.length) return;
 
-  const client = await pool.connect();
+  const values = [];
+  validRows.forEach(row => {
+    values.push(row.name, row.age, row.address, row.additional_info);
+  });
+
+  await dbClient.query(INSERT_USERS_BATCH(validRows.length), values);
+}
+
+/**
+ * Processes a CSV file and prepares database rows in batches.
+ * Handles mandatory field validation, optional JSON fields, and batch insertion.
+ * @param {string} csvFilePath
+ */
+async function processCsv(csvFilePath) {
+  const dbClient = await pool.connect();
   let headers = [];
-  let batch = [];
-  let isFirstLine = true;
-  let totalRecords = 0;
+  let batchRows = [];
+  let totalValidRecords = 0;
+  let isHeaderLine = true;
 
   try {
-    const fileStream = fs.createReadStream(filePath);
-    const csvLineReader = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
+    const fileStream = fs.createReadStream(csvFilePath);
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
-    await client.query('BEGIN'); // Start transaction
+    await dbClient.query('BEGIN');
 
-    for await (const line of csvLineReader) {
+    for await (const line of rl) {
       const trimmedLine = line.trim();
-      if (!trimmedLine) continue; // Skip empty lines
+      if (!trimmedLine) continue;
 
-      if (isFirstLine) {
-        headers = parseCsvLine(trimmedLine);
-        isFirstLine = false;
+      if (isHeaderLine) {
+        headers = trimmedLine.split(',').map(header => header.trim());
+        isHeaderLine = false;
         continue;
       }
 
-      const values = parseCsvLine(trimmedLine);
-      if (values.length !== headers.length) {
-        logger.warn(`Skipping malformed row (column mismatch): ${trimmedLine}`);
+      const rowValues = trimmedLine.split(',').map(value => value.trim());
+      while (rowValues.length < headers.length) rowValues.push('');
+
+      const parsedRecord = {};
+      headers.forEach((header, idx) => parsedRecord[header] = rowValues[idx]);
+
+      const dbRow = mapCsvRecordToDbRow(parsedRecord);
+      if (!dbRow) {
+        logger.warn(`Skipping invalid row: ${trimmedLine}`);
         continue;
       }
 
-      try {
-        const parsedObject = buildObjectFromRow(headers, values);
-        const dbRow = mapRowToDb(parsedObject);
-        batch.push(dbRow);
-        totalRecords++;
+      batchRows.push(dbRow);
+      totalValidRecords++;
 
-        if (batch.length >= BATCH_SIZE) {
-          await insertBatch(batch, client);
-          batch = []; // Reset batch
-        }
-      } catch (rowError) {
-        logger.error(`Error parsing row, skipping: ${trimmedLine}`, rowError);
+      if (batchRows.length >= BATCH_SIZE) {
+        await insertBatch(batchRows, dbClient);
+        batchRows = [];
       }
     }
 
-    if (batch.length > 0) {
-      await insertBatch(batch, client); // Insert remaining records
-    }
+    if (batchRows.length) await insertBatch(batchRows, dbClient);
 
-    await client.query('COMMIT'); // Commit transaction
-    logger.info(`CSV processing completed. Total records processed: ${totalRecords}`);
-  } catch (fatalError) {
-    await client.query('ROLLBACK'); // Rollback transaction on fatal error
-    logger.error('Fatal error during CSV processing. Transaction rolled back.', fatalError.stack);
+    await dbClient.query('COMMIT');
+    logger.info("CSV processing completed.");
+  } catch (err) {
+    await dbClient.query('ROLLBACK');
+    logger.error('Fatal error during CSV processing. Transaction rolled back.', err.stack);
   } finally {
-    client.release();
-    logger.info('Database client released.');
-
-    // Generate age distribution report
+    dbClient.release();
     try {
-      logger.info('Generating age distribution report...');
       await generateReport();
-    } catch (reportError) {
-      logger.error('Failed to generate report:', reportError.stack);
+    } catch (err) {
+      logger.error('Age distribution report generation failed', err.stack);
     }
   }
 }

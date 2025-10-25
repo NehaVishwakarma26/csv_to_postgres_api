@@ -1,7 +1,8 @@
 /**
  * File: queries/userQueries.js
- * Description: Stores SQL queries used across the application for user data retrieval,
- *              aggregation, and table creation.
+ * Description:
+ *   Stores SQL queries used across the application for user data retrieval,
+ *   aggregation, table creation, and batch inserts.
  */
 
 const CREATE_USERS_TABLE = `
@@ -13,6 +14,25 @@ const CREATE_USERS_TABLE = `
     additional_info JSONB NULL
   );
 `;
+
+/**
+ * Generates a parameterized batch insert query for N rows
+ * @param {number} rowCount
+ * @returns {string} SQL query
+ */
+function INSERT_USERS_BATCH(rowCount) {
+  const placeholders = [];
+
+  for (let i = 0; i < rowCount; i++) {
+    const offset = i * 4; // 4 columns: name, age, address, additional_info
+    placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
+  }
+
+  return `
+    INSERT INTO users (name, age, address, additional_info)
+    VALUES ${placeholders.join(', ')}
+  `;
+}
 
 const GET_TOTAL_USERS_WITH_AGE = `
   SELECT COUNT(*) AS total
@@ -45,6 +65,7 @@ const GET_AGE_DISTRIBUTION = `
 
 module.exports = {
   CREATE_USERS_TABLE,
+  INSERT_USERS_BATCH,
   GET_TOTAL_USERS_WITH_AGE,
   GET_AGE_DISTRIBUTION,
 };
