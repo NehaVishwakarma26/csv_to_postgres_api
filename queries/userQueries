@@ -1,0 +1,39 @@
+/**
+ * File: queries/userQueries.js
+ * Description: Stores SQL queries used across the application for user data retrieval
+ *              and aggregation, such as total users and age distribution.
+ */
+
+const GET_TOTAL_USERS_WITH_AGE = `
+  SELECT COUNT(*) AS total
+  FROM users
+  WHERE age IS NOT NULL
+`;
+
+const GET_AGE_DISTRIBUTION = `
+  SELECT age_group, COUNT(*) AS count
+  FROM (
+    SELECT
+      CASE
+        WHEN age < 20 THEN '< 20'
+        WHEN age BETWEEN 20 AND 40 THEN '20 to 40'
+        WHEN age BETWEEN 41 AND 60 THEN '40 to 60'
+        ELSE '> 60'
+      END AS age_group
+    FROM users
+    WHERE age IS NOT NULL
+  ) AS grouped
+  GROUP BY age_group
+  ORDER BY
+    CASE age_group
+      WHEN '< 20' THEN 1
+      WHEN '20 to 40' THEN 2
+      WHEN '40 to 60' THEN 3
+      WHEN '> 60' THEN 4
+    END
+`;
+
+module.exports = {
+  GET_TOTAL_USERS_WITH_AGE,
+  GET_AGE_DISTRIBUTION,
+};

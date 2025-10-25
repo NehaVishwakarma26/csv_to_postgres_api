@@ -1,23 +1,48 @@
 // File: config/db.js
+// Description: Creates and exports a PostgreSQL connection pool. 
+// Validates environment variables and tests the connection at startup.
 
 const { Pool } = require('pg');
+const logger = require('./logger');
 require('dotenv').config();
 
-const pool = new Pool({
+/**
+ * Validate required environment variables
+ */
+const requiredEnvVars = ['DB_USER', 'DB_HOST', 'DB_DATABASE', 'DB_PASSWORD', 'DB_PORT'];
+requiredEnvVars.forEach((envVar) => {
+  if (!process.env[envVar]) {
+    logger.error(`Missing required environment variable: ${envVar}`);
+    throw new Error(`Missing required environment variable: ${envVar}`);
+  }
+});
+
+/**
+ * Create a PostgreSQL connection pool
+ */
+const dbPool = new Pool({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
   database: process.env.DB_DATABASE,
   password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  port: Number(process.env.DB_PORT),
 });
 
-// We'll add a quick test to see if we're connected
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('Error connecting to the database:', err.stack);
-  } else {
-    console.log('Database connected successfully.');
+/**
+ * Test the database connection
+ * Logs success or exits process if connection fails
+ */
+async function testDatabaseConnection() {
+  try {
+    const result = await dbPool.query('SELECT NOW() AS current_time');
+    logger.info(`Database connected successfully at ${result.rows[0].current_time}`);
+  } catch (error) {
+    logger.error(`Database connection failed: ${error.stack}`);
+    process.exit(1); // Stop app if DB is unreachable
   }
-});
+}
 
-module.exports = pool;
+// Test DB connection immediately on startup
+testDatabaseConnection();
+
+module.exports = dbPool;

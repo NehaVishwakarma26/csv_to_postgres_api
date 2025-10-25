@@ -1,56 +1,72 @@
+/**
+ * File: services/csvProcessor.js
+ * Description: Processes CSV files in batches, maps data to DB format, and inserts into PostgreSQL.
+ *              Handles errors, transactions, and generates age distribution reports after processing.
+ */
+
 const fs = require('fs');
 const readline = require('readline');
 const pool = require('../config/db');
+const logger = require('../config/logger');
 const { parseCsvLine, buildObjectFromRow } = require('../utils/parser');
 const { mapRowToDb } = require('../utils/mapper');
 const { generateReport } = require('./reportService');
 
 const BATCH_SIZE = 1000; // Number of records to insert per batch
 
+/**
+ * Inserts a batch of user records into the database.
+ * @param {Array} batch - Array of user objects mapped to DB columns
+ * @param {Object} client - PostgreSQL client
+ */
 async function insertBatch(batch, client) {
-  // Prepare values array and dynamic placeholders for multi-row insert
-  const values = [];
-  const queryParams = batch.map((row, index) => {
-    const i = index * 4; // 4 columns per row
-    values.push(row.name, row.age, row.address, row.additional_info);
-    return `($${i + 1}, $${i + 2}, $${i + 3}, $${i + 4})`;
-  }).join(',');
+  try {
+    const values = [];
+    const placeholders = batch.map((row, index) => {
+      const offset = index * 4; // 4 columns per row
+      values.push(row.name, row.age, row.address, row.additional_info);
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+    }).join(',');
 
-  const queryText = `
-    INSERT INTO users (name, age, address, additional_info)
-    VALUES ${queryParams}
-  `;
+    const insertQuery = `
+      INSERT INTO users (name, age, address, additional_info)
+      VALUES ${placeholders}
+    `;
 
-  await client.query(queryText, values);
+    await client.query(insertQuery, values);
+    logger.info(`Inserted batch of ${batch.length} records.`);
+  } catch (error) {
+    logger.error(`Failed to insert batch: ${error.stack}`);
+    throw error; // Propagate error to rollback transaction
+  }
 }
 
+/**
+ * Processes a CSV file and inserts its data into the database.
+ * @param {string} filePath - Path to the CSV file
+ */
 async function processCsv(filePath) {
-  console.log('Starting CSV processing...');
-  const client = await pool.connect(); // Acquire a client from the pool
+  logger.info(`Starting CSV processing: ${filePath}`);
+
+  const client = await pool.connect();
+  let headers = [];
+  let batch = [];
+  let isFirstLine = true;
+  let totalRecords = 0;
 
   try {
-    // Create a read stream and readline interface for streaming CSV lines
     const fileStream = fs.createReadStream(filePath);
-    const rl = readline.createInterface({
+    const csvLineReader = readline.createInterface({
       input: fileStream,
-      crlfDelay: Infinity // Handle different line endings
+      crlfDelay: Infinity
     });
 
-    let headers = [];
-    let batch = [];
-    let isFirstLine = true;
-    let totalCount = 0;
+    await client.query('BEGIN'); // Start transaction
 
-    // Begin transaction for batch inserts
-    await client.query('BEGIN');
-
-    for await (const line of rl) {
+    for await (const line of csvLineReader) {
       const trimmedLine = line.trim();
+      if (!trimmedLine) continue; // Skip empty lines
 
-      // Skip empty lines
-      if (!trimmedLine) continue;
-
-      // Parse headers from the first line
       if (isFirstLine) {
         headers = parseCsvLine(trimmedLine);
         isFirstLine = false;
@@ -58,53 +74,46 @@ async function processCsv(filePath) {
       }
 
       const values = parseCsvLine(trimmedLine);
-
-      // Skip rows where column count does not match headers
       if (values.length !== headers.length) {
-        console.warn('Skipping malformed row (column mismatch):', trimmedLine);
+        logger.warn(`Skipping malformed row (column mismatch): ${trimmedLine}`);
         continue;
       }
 
       try {
-        // Convert CSV row to nested JavaScript object
         const parsedObject = buildObjectFromRow(headers, values);
-
-        // Map nested object to database row format
         const dbRow = mapRowToDb(parsedObject);
-
         batch.push(dbRow);
-        totalCount++;
+        totalRecords++;
 
-        // Insert batch if it reaches the configured size
         if (batch.length >= BATCH_SIZE) {
           await insertBatch(batch, client);
-          console.log(`Inserted batch of ${batch.length} records.`);
           batch = []; // Reset batch
         }
-      } catch (error) {
-        console.error('Error parsing row, skipping:', trimmedLine, error);
+      } catch (rowError) {
+        logger.error(`Error parsing row, skipping: ${trimmedLine}`, rowError);
       }
     }
 
-    // Insert any remaining rows after loop completes
     if (batch.length > 0) {
-      await insertBatch(batch, client);
-      console.log(`Inserted final batch of ${batch.length} records.`);
+      await insertBatch(batch, client); // Insert remaining records
     }
 
-    // Commit transaction after all inserts succeed
-    await client.query('COMMIT');
-    console.log(`CSV processing completed. Total records processed: ${totalCount}.`);
-  } catch (error) {
-    // Rollback transaction on fatal error
-    await client.query('ROLLBACK');
-    console.error('Fatal error during CSV processing. Transaction rolled back.', error.stack);
+    await client.query('COMMIT'); // Commit transaction
+    logger.info(`CSV processing completed. Total records processed: ${totalRecords}`);
+  } catch (fatalError) {
+    await client.query('ROLLBACK'); // Rollback transaction on fatal error
+    logger.error('Fatal error during CSV processing. Transaction rolled back.', fatalError.stack);
   } finally {
-    client.release(); // Release client back to pool
+    client.release();
+    logger.info('Database client released.');
 
-    // Generate age distribution report after processing
-    console.log('Generating age distribution report...');
-    await generateReport();
+    // Generate age distribution report
+    try {
+      logger.info('Generating age distribution report...');
+      await generateReport();
+    } catch (reportError) {
+      logger.error('Failed to generate report:', reportError.stack);
+    }
   }
 }
 
