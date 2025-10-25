@@ -1,8 +1,18 @@
 /**
  * File: queries/userQueries.js
- * Description: Stores SQL queries used across the application for user data retrieval
- *              and aggregation, such as total users and age distribution.
+ * Description: Stores SQL queries used across the application for user data retrieval,
+ *              aggregation, and table creation.
  */
+
+const CREATE_USERS_TABLE = `
+  CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    age INT NOT NULL,
+    address JSONB NULL,
+    additional_info JSONB NULL
+  );
+`;
 
 const GET_TOTAL_USERS_WITH_AGE = `
   SELECT COUNT(*) AS total
@@ -34,6 +44,7 @@ const GET_AGE_DISTRIBUTION = `
 `;
 
 module.exports = {
+  CREATE_USERS_TABLE,
   GET_TOTAL_USERS_WITH_AGE,
   GET_AGE_DISTRIBUTION,
 };
