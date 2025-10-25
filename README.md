@@ -5,8 +5,8 @@ A Node.js application to parse a CSV file, convert rows to JSON with nested prop
 ## Quick Start
 
 ### Clone the Repository
-git clone <your-repo-url>
-cd <your-repo-folder>
+git clone https://github.com/NehaVishwakarma26/csv_to_postgres_api.git
+cd csv_to_postgres_api
 
 ### Install Dependencies
 npm install
